@@ -4,7 +4,7 @@ from flask import Flask, request, jsonify
 DB = 'jobs.db'
 NUM_THREADS = 4
 MAX_RETRIES = 3
-RETRY_INTERVAL = 60
+RETRY_INTERVAL = 10
 job_q = queue.Queue()
 app = Flask(__name__)
 
@@ -15,7 +15,6 @@ def api_add_job():
     src = base64.b64decode(data["src"]).decode()
     dst = base64.b64decode(data["dst"]).decode()
     add_job(job_id, src, dst)
-    job_q.put(job_id, src, dst)
     return jsonify({"status": "queued", "id": job_id})
 
 
@@ -34,21 +33,24 @@ def add_job(job_id, src, dst):
         db.execute("INSERT OR REPLACE INTO jobs (id, src, dst, status) VALUES (?, ?, ?, 'pending')",
                    (job_id, src, dst))
         db.commit()
+        job_q.put((job_id, src, dst))
         print(f"add_job {job_id} {src} {dst}")
 
 def load_jobs():
     with sqlite3.connect(DB) as db:
-        for row in db.execute("SELECT id, src, dst FROM jobs WHERE status='pending'"):
-            job_q.put(row)
+        for job_id, src, dst in db.execute("SELECT id, src, dst FROM jobs WHERE status='pending'"):
+            print(f"load_jobs: {job_id}")
+            job_q.put((job_id, src, dst))
 
 def retry_failed():
+    print(f"Retry worker started")
     while True:
         with sqlite3.connect(DB) as db:
             for job_id, src, dst, retries, queued in db.execute(
                 "SELECT id, src, dst, retries, queued FROM jobs WHERE status='failed' AND queued=0"
             ):
                 if retries < MAX_RETRIES:
-                    print(f"Retry {job_id} (attempt {retries+1})")
+                    print(f"RETRY {job_id} (attempt {retries+1})")
                     db.execute("UPDATE jobs SET status='retrying', retries=?, queued=1 WHERE id=?",
                                (retries+1, job_id))
                     job_q.put((job_id, src, dst))
@@ -59,6 +61,7 @@ def retry_failed():
         time.sleep(RETRY_INTERVAL)
 
 def worker(thread_id):
+    print(f"Worker started: {thread_id}")
     while True:
         try:
             job_id, src, dst = job_q.get(timeout=3)
@@ -81,6 +84,7 @@ def worker(thread_id):
                 db.execute("UPDATE jobs SET status='failed' WHERE id=?", (job_id,))
                 print(f"{thread_id}: FAILED {job_id}, return code: {res.returncode}")
             db.commit()
+            continue
         print(f"{thread_id}: task done {job_id}")
         job_q.task_done()
 

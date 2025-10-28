@@ -4,11 +4,11 @@ JOB=$1
 SRC=$2
 DST=$3
 
-SLEEP=$((RANDOM % 46 + 5))
+SLEEP=$((RANDOM % 16 + 5))
 sleep $SLEEP
 
 RAND=$((RANDOM % 100))
-if [ "$RAND" -lt 5 ]; then
+if [ "$RAND" -lt 50 ]; then
 	echo oh nose fail
 	exit 1
 else
